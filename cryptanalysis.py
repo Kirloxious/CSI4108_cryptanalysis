@@ -7,6 +7,7 @@ np.random.seed(seed)
 #Split 16-bit data block into 4x4 sub-blocks to have a 4x4 S-box with 4 bit input and 4 bit output
 def gen_s_box():
     sbox = [11, 12, 3, 13, 2, 7, 6, 8, 0, 10, 4, 1, 5, 15, 14, 9]
+    # sbox = [4, 8, 7, 10, 2, 13, 12, 3, 15, 0, 9, 14, 5, 1, 11, 6]
     return sbox
 
 #5 16-bit round keys
@@ -36,42 +37,40 @@ def bit_combine(blocks):
 # Define a bit permutation function
 def permute_bits(x):
     perm = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15] 
-    # Permute bits according to the pattern
+    # perm = [3, 2, 14, 6, 12, 13, 10, 8, 9, 5, 0, 4, 15, 11, 7, 1]
+    # # Permute bits according to the pattern
     permuted = 0
     for i in range(16):
-        if (x >> i) & 1:
-            permuted |= (1 << perm[i])
+        if (x >> (15 - i)) & 1:
+            # Set the bit in the permuted position
+            permuted |= (1 << (15 - perm[i]))
 
     return permuted & 0xffff
 
-def apply_s_box(s_box, blocks):
+
+def apply_s_box(s_box, input):
+    blocks = bit_split(input)
     for i in range(0, 4):
         blocks[i] = s_box[blocks[i]]
-    return blocks
+    return bit_combine(blocks)
         
 
 #Encrypt plaintext with simple Feistel structuture with 5 round keys
 def encrypt(text, keys, s_box):
-    blocks = bit_split(text)
-    for r in range(0, len(keys)-2):
-
-        blocks = apply_s_box(s_box, blocks)
-
-        text = bit_combine(blocks)
+    text = text ^ keys[0]
+    for r in range(1, len(keys)-1):
+        
+        #apply sbox
+        text = apply_s_box(s_box, text)
 
         #apply bit permutation
         text = permute_bits(text)
-        b = bit_split(text)
 
         #XOR with round key
         text = text ^ keys[r]
 
-        #split for next round
-        blocks = bit_split(text)
-
     # Final round with no bit permutation
-    blocks = apply_s_box(s_box, blocks)
-    text = bit_combine(blocks)
+    text = apply_s_box(s_box, text)
     text = text ^ keys[-1]
     
     return text
@@ -140,9 +139,13 @@ class Diff_Analysis:
 
                             # Add probability of this output bit to total probability
                             probability *= (output_pair[2] / 16)
-                            s_box_trace.append((r, j+1, output_pair))
-                    p = bit_combine(bits)
-                    p = permute_bits(p)
+                            output_perm = bit_combine(bits)
+                            output_perm = permute_bits(output_perm)
+                            s_box_trace.append((r, j+1, output_pair, output_perm))
+                            
+                        p = bit_combine(bits)
+                        p = permute_bits(p)
+
 
                 s_box_traces.append((s_box_trace, probability, p))
 
@@ -197,6 +200,7 @@ class Diff_Analysis:
                 #since the input difference only influences blocks 2 and 4
                 if(ct_diff & 0xf0f0) != 0:
                     continue
+         
 
                 for partial_subkey in possible_subkeys:
                     #Partial decrypt with all possible subkeys
@@ -228,8 +232,8 @@ def print_formatted_binary(message, n):
 def print_subkey_table(subkey_table):
     print("[K5..K8, K13..K16]   Prob")
     for key, prob in sorted(subkey_table.items(), key=lambda item: item[1], reverse=True):
-        print(f"      [{key}]         {prob}")
-    pass
+        print(f"      [{key}]          {prob*100:.2f}%")
+
 
 #Shared for Person 1 & 2
 sbox = gen_s_box()
@@ -237,6 +241,7 @@ diff_analysis = Diff_Analysis()
 diff_analysis.difference_distribution_table(sbox)
 diff_analysis.difference_pairs()
 diff_analysis.compute_best_differential_probability()
+
 
 #Hidden from Person 2
 round_keys = gen_round_keys()
@@ -251,8 +256,9 @@ print_formatted_binary("5th Round key", round_keys[4])
 print(f"Difference distribution table: \n{diff_analysis.ddt}\n")
 
 print("S-box Trail:")
+
 for trace in diff_analysis.best_characteristic[0]:
-    print(f"S-box{trace[0]}{trace[1]}: Input = {trace[2][0]}, Output = {trace[2][1]}, Probability = {trace[2][2]}/16")
+    print(f"S-box{trace[0]}{trace[1]}: Delta X = {trace[2][0]}, Delta Y = {trace[2][1]}, Permutation out = {trace[3]:04x}, Probability = {trace[2][2]}/16")
 print_formatted_binary("Plaintext with highest probability of encryption (Input difference)", diff_analysis.input_diff)
 print_formatted_binary("Expected output difference", diff_analysis.expected_output_diff)
 
